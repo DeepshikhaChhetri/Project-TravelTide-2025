@@ -1,4 +1,4 @@
--- Cohort definition: We're looking at users who have had more than seven sessions since a specific date. 
+-- Cohort definition: We're looking at users with more than seven sessions since a specific date. 
 -- This CTE prelimits our sessions on Elena's suggested timeframe (After Jan 4 2023)
 WITH sessions_2023 AS (
   SELECT *
@@ -6,7 +6,7 @@ WITH sessions_2023 AS (
   where s.session_start > '2023-01-04'
 ),
   
--- This CTE returns the ids of all users with more than 7 sessions in 2023
+-- This CTE returns the IDs of all users with more than 7 sessions in 2023
 filtered_users AS (
   SELECT user_id, COUNT(*) FROM sessions_2023 s
   GROUP BY user_id
@@ -18,7 +18,7 @@ filtered_users AS (
 -- We made sure to limit the session according to Elena's recommendations
 
 -- Each row is a browsing session on the TravelTide App
--- Sessions have trips connected to them when they were booked or canceled
+-- Sessions have trips connected to them when they were booked or cancelled
 -- We have already cleaned the column of nights in a hotel, because it contained negative values
 session_base AS
 (select s.session_id, s.user_id, s.trip_id, s.session_start, s.session_end, EXTRACT(EPOCH FROM s.session_end-s.session_start) as session_duration, s.page_clicks,
@@ -35,8 +35,8 @@ left join hotels h
 on s.trip_id = h.trip_id
 WHERE s.user_id IN (SELECT user_id FROM filtered_users)),
 
--- This CTE returns the ids of all trips that have been canceled through a session
--- We use this list to filter all canceled sessions in the next CTE
+-- This CTE returns the IDs of all trips that have been canceled through a session
+-- We use this list to filter all cancelled sessions in the next CTE
 canceled_trips AS (
   SELECT DISTINCT trip_id
   FROM session_base
@@ -46,7 +46,7 @@ canceled_trips AS (
 -- This is our second base table to aggregate later
 -- It is derived from our session_base table, but we focus on valid trips
 
--- All sessions without trips, all canceled trips have been removed
+-- All sessions without trips, all cancelled trips have been removed
 -- Each row represents a trip that a user did
 not_canceled_trips AS(
   SELECT *
@@ -75,7 +75,7 @@ aggregated_data AS (
   	--Booking Behaviour
   	-- total number of booked trips
   	COUNT(DISTINCT CASE WHEN NOT cancellation THEN s.trip_id END) AS total_trips,
-  	-- conversion rate, dividing the number of booked trips (in case of no cancellation) by total number of browising sessions
+  	-- conversion rate, dividing the number of booked trips (in case of no cancellation) by total number of browsing sessions
   	ROUND(
               CASE WHEN COUNT(DISTINCT s.session_id) > 0 THEN 
   	      1.0 * COUNT(DISTINCT CASE WHEN NOT cancellation THEN s.trip_id END) / COUNT(DISTINCT s.session_id)
