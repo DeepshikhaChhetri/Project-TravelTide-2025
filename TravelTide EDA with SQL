@@ -1,0 +1,240 @@
+-- Cohort definition: We're looking at users who have had more than seven sessions since a specific date. 
+-- This CTE prelimits our sessions on Elena's suggested timeframe (After Jan 4 2023)
+WITH sessions_2023 AS (
+  SELECT *
+  FROM sessions s
+  where s.session_start > '2023-01-04'
+),
+  
+-- This CTE returns the ids of all users with more than 7 sessions in 2023
+filtered_users AS (
+  SELECT user_id, COUNT(*) FROM sessions_2023 s
+  GROUP BY user_id
+  HAVING COUNT(*) > 7
+),
+
+-- This is our main session base table
+-- It joins Sessions with all available user and trip information
+-- We made sure to limit the session according to Elena's recommendations
+
+-- Each row is a browsing session on the TravelTide App
+-- Sessions have trips connected to them when they were booked or canceled
+-- We have already cleaned the column of nights in a hotel, because it contained negative values
+session_base AS
+(select s.session_id, s.user_id, s.trip_id, s.session_start, s.session_end, EXTRACT(EPOCH FROM s.session_end-s.session_start) as session_duration, s.page_clicks,
+ s.flight_discount, s.flight_discount_amount, s.hotel_discount, s.hotel_discount_amount, s.flight_booked, s.hotel_booked, s.cancellation,
+ u.birthdate, u.gender, u.married, u.has_children, u.home_country, u.home_city, u.home_airport, u.home_airport_lat, u.home_airport_lon,u.sign_up_date,
+ f.origin_airport, f.destination, f.destination_airport, f.seats, f.return_flight_booked, f.departure_time, f.return_time, f.checked_bags, f.trip_airline, f.destination_airport_lat, f.destination_airport_lon,f.base_fare_usd,
+ h.hotel_name, CASE WHEN h.nights < 0 THEN 1 ELSE h.nights END AS nights, h.rooms, h.check_in_time, h.check_out_time, h.hotel_per_room_usd AS hotel_price_per_room_night_usd
+from sessions_2023 s
+left join users u
+on s.user_id = u.user_id
+left join flights f
+on s.trip_id = f.trip_id
+left join hotels h
+on s.trip_id = h.trip_id
+WHERE s.user_id IN (SELECT user_id FROM filtered_users)),
+
+-- This CTE returns the ids of all trips that have been canceled through a session
+-- We use this list to filter all canceled sessions in the next CTE
+canceled_trips AS (
+  SELECT DISTINCT trip_id
+  FROM session_base
+  WHERE cancellation = TRUE
+),
+
+-- This is our second base table to aggregate later
+-- It is derived from our session_base table, but we focus on valid trips
+
+-- All sessions without trips, all canceled trips have been removed
+-- Each row represents a trip that a user did
+not_canceled_trips AS(
+  SELECT *
+  FROM session_base
+	WHERE trip_id IS NOT NULL
+	AND trip_id NOT IN (SELECT trip_id FROM canceled_trips)),
+  
+
+-- We want to aggregate user behaviour into metrics (a row per user)
+-- This CTE contains metrics that have to do with the browsing behaviour
+-- ALL SESSION within our cohort get aggregated
+-- Only rows with VALID trips within our cohort get aggregated
+
+-- Aggregate and Merge Data
+aggregated_data AS (
+  --User's session and engagement
+    SELECT
+        s.user_id,
+  	-- total number of user's sessions
+        COUNT(DISTINCT s.session_id) AS session_count,
+  	-- average duration of sessions in minute
+  	ROUND(AVG(EXTRACT(MINUTE FROM (session_end - session_start))),2) AS avg_session_duration_minute,
+  	-- average number of clicks in all browsing sessions
+  	ROUND(AVG(page_clicks),2) AS avg_page_clicks,
+  
+  	--Booking Behaviour
+  	-- total number of booked trips
+  	COUNT(DISTINCT CASE WHEN NOT cancellation THEN s.trip_id END) AS total_trips,
+  	-- conversion rate, dividing the number of booked trips (in case of no cancellation) by total number of browising sessions
+  	ROUND(
+              CASE WHEN COUNT(DISTINCT s.session_id) > 0 THEN 
+  	      1.0 * COUNT(DISTINCT CASE WHEN NOT cancellation THEN s.trip_id END) / COUNT(DISTINCT s.session_id)
+  	      ELSE 0 END
+              ,2) AS conversion_rate,
+  	-- Cancellation proportion, returns NULL for users who didn't book any trip to not get division by zero error
+  	ROUND(
+              1.0 * COUNT(DISTINCT CASE WHEN cancellation THEN s.trip_id END) /
+    	      NULLIF(COUNT(DISTINCT CASE WHEN NOT cancellation THEN s.trip_id END), 0)
+              ,2) AS cancellation_proportion,
+  --Average kms flown
+  AVG(haversine_distance(home_airport_lat, home_airport_lon, destination_airport_lat, destination_airport_lon)) AS avg_km_flown,
+  
+  --Gap in booking and flight departure
+  -- calculating the booking to departure time gap in seconds and then days by dividing by 86400
+  	ROUND(
+    	      AVG(EXTRACT(EPOCH FROM (f.departure_time - s.session_end)) / 86400) 
+              ,2) AS avg_booking_departure_gap_days_flights,
+  	-- As some users only booked hotels, added another calculation considering hotel check_in_time 
+  	ROUND(
+    	      AVG(EXTRACT(EPOCH FROM (h.check_in_time - s.session_end)) / 86400) 
+              ,2) AS avg_booking_departure_gap_days_hotels,  
+    	
+  --Flight details
+  -- total number of flights
+        COUNT(DISTINCT CASE WHEN flight_booked THEN s.trip_id END) AS total_flights_booked,
+  SUM(CASE WHEN (flight_booked = TRUE) AND (return_flight_booked = TRUE) THEN 2 WHEN flight_booked = TRUE THEN 1 ELSE 0 END) AS num_flights,
+  	/* Weekend trips proportion, to distinguish weekened gateway travelers,
+  	 when the departure time is on Fridays or Saturdays, and return_time is on Sundays or Mondays
+  	and the duration of the trip is less than three days
+  	*/
+  	ROUND(
+              CASE WHEN COUNT(DISTINCT CASE WHEN NOT cancellation THEN s.trip_id END) > 0 THEN
+  	      1.0 * COUNT(DISTINCT CASE WHEN EXTRACT(DOW FROM departure_time) IN (5,6) 
+              AND return_flight_booked IS TRUE 
+              AND EXTRACT(DOW FROM return_time) IN (0,1) 
+              AND EXTRACT(DAY FROM (return_time - departure_time)) < 3
+              THEN f.trip_id 
+              ELSE NULL END) / COUNT(DISTINCT CASE WHEN NOT cancellation THEN s.trip_id END) ELSE 0 END
+             ,2) AS weekend_trip_proportion,
+  	-- Round trips proportion, users who booked two ways flights
+	ROUND(
+             CASE WHEN COUNT(DISTINCT CASE WHEN flight_booked THEN s.trip_id END) > 0 THEN
+             1.0 * COUNT(DISTINCT CASE WHEN return_flight_booked THEN s.trip_id END) /  
+             COUNT(DISTINCT CASE WHEN flight_booked THEN s.trip_id END) ELSE 0 END
+             ,2) AS round_trips_proportion,
+  	
+  --Hotel details
+  -- total number of booked hotels
+     COUNT(DISTINCT CASE WHEN hotel_booked THEN s.trip_id END) AS total_hotels_booked,
+-- average number of rooms in booked hotels
+     ROUND(SUM(rooms),2) AS total_hotel_rooms,
+-- total duration of hotel stays in days
+     ROUND(SUM(EXTRACT(DAY FROM (check_out_time - check_in_time))),2) AS total_stay_duration_day,
+ 
+  
+  --Other financial details
+  -- average flight price 
+  	ROUND(AVG(base_fare_usd),2) AS avg_flight_price_usd,
+  	-- average flight discount amount
+        ROUND(AVG(flight_discount_amount),2) AS avg_flight_discount_amount,
+  	-- discounted flights proportion
+  	ROUND(SUM(CASE WHEN flight_discount THEN 1 ELSE 0 END) :: NUMERIC / COUNT(*),2) AS discounted_flight_proportion,
+  	-- average number of booked flight seats
+  	ROUND(AVG(seats),2) AS avg_flight_seats,
+  	-- average number of checked bags in flights
+  	ROUND(AVG(checked_bags),2) AS avg_checked_bags,
+  	-- average hotel price
+  	ROUND(AVG(hotel_per_room_usd),2) AS avg_hotel_price_usd,
+  	-- average hotel discount amount
+  	ROUND(AVG(hotel_discount_amount),2) AS avg_hotel_discount_amount,
+  	-- discounted hotel proportion 
+  	ROUND(SUM(CASE WHEN hotel_discount THEN 1 ELSE 0 END) :: NUMERIC / COUNT(*),2) AS discounted_hotel_proportion,
+  --average Money spent in hotel 
+  COALESCE((SUM((hotel_per_room_usd * nights * rooms) * (1 - (CASE WHEN hotel_discount_amount IS NULL THEN 0 ELSE hotel_discount_amount END)))),0) AS money_spend_hotel
+  
+    FROM sessions AS s
+    LEFT JOIN flights AS f ON s.trip_id = f.trip_id
+    LEFT JOIN hotels AS h ON s.trip_id = h.trip_id
+    LEFT JOIN users AS u ON s.user_id = u.user_id
+    WHERE s.user_id IN (SELECT user_id FROM filtered_users)
+    GROUP BY s.user_id),
+
+-- Final Selection
+final as (SELECT 
+    -- user demographic information
+    u.user_id,
+    u.sign_up_date,
+    EXTRACT(YEAR FROM AGE(u.birthdate)) AS age,
+    u.gender,
+    u.married,
+    u.has_children,
+    u.home_country,
+    u.home_city,
+    -- browsing sessions info
+    ad.session_count,
+    ad.avg_session_duration_minute,
+    ad.avg_page_clicks,
+    -- booking behaviour
+    ad.total_trips,
+    ad.conversion_rate,
+    ad.weekend_trip_proportion,
+    ad.cancellation_proportion,
+    ad.avg_km_flown,
+    ad.avg_booking_departure_gap_days_flights,
+    ad.avg_booking_departure_gap_days_hotels,
+    -- booked flights info
+    ad.total_flights_booked,
+    ad.num_flights,
+    ad.round_trips_proportion,
+    ad.avg_flight_price_usd,
+    ad.avg_flight_discount_amount,
+    ad.discounted_flight_proportion,
+    ad.avg_flight_seats,
+    ad.avg_checked_bags,
+    -- booked hotels info
+    ad.total_hotels_booked,
+    ad.avg_hotel_price_usd,
+    ad.avg_hotel_discount_amount,
+    ad.discounted_hotel_proportion,
+    ad.total_hotel_rooms,
+    ad.total_stay_duration_day,
+    ad.money_spend_hotel
+FROM users AS u
+JOIN aggregated_data AS ad ON u.user_id = ad.user_id),
+
+transformed AS (SELECT *, 
+  CASE 
+    WHEN gender = 'Female' THEN 1 ELSE 0 
+    END AS gender_flag, 
+  CASE 
+    WHEN home_country = 'usa' THEN 0
+    WHEN home_country = 'canada' THEN 1
+    ELSE NULL 
+    END AS home_country_cat,
+  CASE 
+    WHEN married = TRUE THEN 1 ELSE 0 
+    END AS married_flag,
+  CASE 
+    WHEN has_children = TRUE THEN 1 
+      ELSE 0 
+    END AS has_children_flag 
+FROM final),
+
+perks AS (SELECT *, CASE
+          WHEN total_trips = 0 THEN '30% off first travel'
+          WHEN age < 20 AND has_children = TRUE THEN 'Free child ticket'
+          WHEN age < 20 AND has_children = FALSE THEN 'Discount at special events'
+          WHEN age > 60 THEN 'Meal voucher'
+          WHEN age >= 20 AND age <= 60 AND has_children = TRUE AND avg_km_flown > 2 THEN 'Free child ticket'
+          WHEN age >= 20 AND age <= 60 AND num_flights > 9 THEN 'Free meal'
+          WHEN num_flights > 5 THEN 'Priority Boarding'
+          WHEN avg_km_flown > 5 THEN 'Lounge Access'
+          WHEN num_flights > 15 THEN 'Extra Legroom Seats'
+          WHEN money_spend_hotel > 500 THEN 'Bonus Reward Points'
+          WHEN avg_booking_departure_gap_days_flights < 3 THEN 'Fast-Track Security Clearance'
+          WHEN cancellation_proportion < 0.1 THEN 'Flexible Rescheduling'
+          ELSE '10% off next trip'
+          END AS perk
+FROM transformed)
+
+SELECT * from perks
