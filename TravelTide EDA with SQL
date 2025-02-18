@@ -1,4 +1,16 @@
--- Cohort definition: We're looking at users with more than seven sessions since a specific date. 
+-- ====================================================================
+-- TravelTide Customer Segmentation & Perks Assignment
+-- ====================================================================
+-- Purpose: To identify behavioral markers among TravelTide customers, calculate key engagement, booking, and revenue metrics, segment customers into predefined groups, and assign targeted perks.
+-- Audience: Elena (Head of Marketing) for strategic insights and our technical team for process transparency.
+-- ====================================================================
+
+-- --------------------------------------------------------------------
+-- Step 1: Define the Cohort
+-- We focus on sessions after January 4, 2023 to capture recent customer behavior and select only active users with >7 sessions.
+-- This ensures we analyze engaged customers who are more likely to be receptive to rewards programs.
+-- --------------------------------------------------------------------
+
 -- This CTE prelimits our sessions on Elena's suggested timeframe (After Jan 4 2023)
 WITH sessions_2023 AS (
   SELECT *
@@ -6,47 +18,81 @@ WITH sessions_2023 AS (
   where s.session_start > '2023-01-04'
 ),
   
--- This CTE returns the IDs of all users with more than 7 sessions in 2023
+-- This CTE will Count sessions per user and filter for those with more than 7 sessions
 filtered_users AS (
   SELECT user_id, COUNT(*) FROM sessions_2023 s
   GROUP BY user_id
   HAVING COUNT(*) > 7
 ),
 
--- This is our main session base table
--- It joins Sessions with all available user and trip information
--- We made sure to limit the session according to Elena's recommendations
+-- --------------------------------------------------------------------
+-- Step 2: Build the Session Base Table
+-- We join sessions with user, flight, and hotel tables to consolidate all relevant information per browsing session. 
+-- We also correct any negative hotel nights (setting them to 1) for data accuracy.
+-- --------------------------------------------------------------------
 
--- Each row is a browsing session on the TravelTide App
--- Sessions have trips connected to them when they were booked or cancelled
--- We have already cleaned the column of nights in a hotel, because it contained negative values
 session_base AS
-(select s.session_id, s.user_id, s.trip_id, s.session_start, s.session_end, EXTRACT(EPOCH FROM s.session_end-s.session_start) as session_duration, s.page_clicks,
- s.flight_discount, s.flight_discount_amount, s.hotel_discount, s.hotel_discount_amount, s.flight_booked, s.hotel_booked, s.cancellation,
- u.birthdate, u.gender, u.married, u.has_children, u.home_country, u.home_city, u.home_airport, u.home_airport_lat, u.home_airport_lon,u.sign_up_date,
- f.origin_airport, f.destination, f.destination_airport, f.seats, f.return_flight_booked, f.departure_time, f.return_time, f.checked_bags, f.trip_airline, f.destination_airport_lat, f.destination_airport_lon,f.base_fare_usd,
- h.hotel_name, CASE WHEN h.nights < 0 THEN 1 ELSE h.nights END AS nights, h.rooms, h.check_in_time, h.check_out_time, h.hotel_per_room_usd AS hotel_price_per_room_night_usd
-from sessions_2023 s
-left join users u
-on s.user_id = u.user_id
-left join flights f
-on s.trip_id = f.trip_id
-left join hotels h
-on s.trip_id = h.trip_id
-WHERE s.user_id IN (SELECT user_id FROM filtered_users)),
+(SELECT 
+    s.session_id,
+    s.user_id,
+    s.trip_id,
+    s.session_start,
+    s.session_end,
+    EXTRACT(EPOCH FROM s.session_end - s.session_start) AS session_duration,  -- Session duration in seconds
+    s.page_clicks,
+    s.flight_discount,
+    s.flight_discount_amount,
+    s.hotel_discount,
+    s.hotel_discount_amount,
+    s.flight_booked,
+    s.hotel_booked,
+    s.cancellation,
+    u.birthdate,
+    u.gender,
+    u.married,
+    u.has_children,
+    u.home_country,
+    u.home_city,
+    u.home_airport,
+    u.home_airport_lat,
+    u.home_airport_lon,
+    u.sign_up_date,
+    f.origin_airport,
+    f.destination,
+    f.destination_airport,
+    f.seats,
+    f.return_flight_booked,
+    f.departure_time,
+    f.return_time,
+    f.checked_bags,
+    f.trip_airline,
+    f.destination_airport_lat,
+    f.destination_airport_lon,
+    f.base_fare_usd,
+    h.hotel_name,
+    CASE WHEN h.nights < 0 THEN 1 ELSE h.nights END AS nights,  -- Correct negative nights
+    h.rooms,
+    h.check_in_time,
+    h.check_out_time,
+    h.hotel_per_room_usd AS hotel_price_per_room_night_usd
+  FROM sessions_2023 s
+  LEFT JOIN users u ON s.user_id = u.user_id
+  LEFT JOIN flights f ON s.trip_id = f.trip_id
+  LEFT JOIN hotels h ON s.trip_id = h.trip_id
+  WHERE s.user_id IN (SELECT user_id FROM filtered_users)
+),
 
--- This CTE returns the IDs of all trips that have been canceled through a session
--- We use this list to filter all cancelled sessions in the next CTE
+-- --------------------------------------------------------------------
+-- Step 3: Exclude Canceled Trips
+-- We remove trips that were cancelled to focus solely on valid, completed bookings for accurate revenue and engagement metrics.
+-- --------------------------------------------------------------------
 canceled_trips AS (
   SELECT DISTINCT trip_id
   FROM session_base
   WHERE cancellation = TRUE
 ),
 
--- This is our second base table to aggregate later
--- It is derived from our session_base table, but we focus on valid trips
-
--- All sessions without trips, all cancelled trips have been removed
+-- All sessions without trips, and all cancelled trips have been removed
 -- Each row represents a trip that a user did
 not_canceled_trips AS(
   SELECT *
@@ -55,12 +101,16 @@ not_canceled_trips AS(
 	AND trip_id NOT IN (SELECT trip_id FROM canceled_trips)),
   
 
--- We want to aggregate user behaviour into metrics (a row per user)
--- This CTE contains metrics that have to do with the browsing behaviour
--- ALL SESSION within our cohort get aggregated
--- Only rows with VALID trips within our cohort get aggregated
-
--- Aggregate and Merge Data
+-- --------------------------------------------------------------------
+-- Step 4: Aggregate Metrics at the Customer Level
+-- We compute key behavioural and financial metrics per user.
+-- Metrics include:
+--   - Session Count, Average Session Duration, and Page Clicks (engagement)
+--   - Total Trips, Conversion Rate, and Cancellation Proportion (booking behavior)
+--   - Average KM Flown, Booking-to-Departure Gaps (travel behavior)
+--   - Flight and Hotel specific metrics (e.g., flights booked, total hotel rooms,
+--     total stay duration, revenue-related metrics)
+-- --------------------------------------------------------------------
 aggregated_data AS (
   --User's session and engagement
     SELECT
@@ -159,7 +209,10 @@ aggregated_data AS (
     WHERE s.user_id IN (SELECT user_id FROM filtered_users)
     GROUP BY s.user_id),
 
--- Final Selection
+-- --------------------------------------------------------------------
+-- Step 5: Combine Aggregated Metrics with User Demographics
+-- This join attaches demographic data (age, gender, etc.) to the computed metrics.
+-- --------------------------------------------------------------------
 final as (SELECT 
     -- user demographic information
     u.user_id,
@@ -202,6 +255,10 @@ final as (SELECT
 FROM users AS u
 JOIN aggregated_data AS ad ON u.user_id = ad.user_id),
 
+-- --------------------------------------------------------------------
+-- Step 6: Transform Fields for Easier Segmentation
+-- We create binary flags (e.g., gender_flag) and simplify categorical values.
+-- --------------------------------------------------------------------
 transformed AS (SELECT *, 
   CASE 
     WHEN gender = 'Female' THEN 1 ELSE 0 
@@ -220,6 +277,11 @@ transformed AS (SELECT *,
     END AS has_children_flag 
 FROM final),
 
+-- --------------------------------------------------------------------
+-- Step 7: Assign Perks Based on Behavioral & Financial Metrics
+-- We use business rules to assign each customer a perk.
+-- For example, customers with high flight counts or high spend receive VIP perks.
+-- --------------------------------------------------------------------
 perks AS (SELECT *, CASE
           WHEN total_trips = 0 THEN '30% off first travel'
           WHEN age < 20 AND has_children = TRUE THEN 'Free child ticket'
@@ -237,4 +299,9 @@ perks AS (SELECT *, CASE
           END AS perk
 FROM transformed)
 
+-- --------------------------------------------------------------------
+-- Final Output: Customer Segmentation with Assigned Perks
+-- This final SELECT returns the enriched customer data with segmentation,
+-- metrics, and the recommended perk for each customer.
+-- --------------------------------------------------------------------
 SELECT * from perks
