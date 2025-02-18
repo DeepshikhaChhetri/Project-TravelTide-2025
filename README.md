@@ -1,5 +1,5 @@
 # Executive Summary - Project TravelTide - Feb'2025
-Link: 
+Link: https://github.com/DeepshikhaChhetri/Project-TravelTide-Feb2025/blob/main/1.%20Executive%20Summary.pdf
 
 ## Company & Context
 TravelTide, a rapidly growing online travel platform, aims to strengthen customer retention by leveraging data-driven insights. The analysis focused on user behavior—sessions, bookings, cancellations, spending—to identify patterns that inform a targeted rewards program.
@@ -30,8 +30,11 @@ High-value segments, though smaller, drive a significant share of revenue.
 Lower-engagement segments may respond to introductory discounts or more flexible policies.
 Future steps include A/B testing of perks, broader data integration, and direct customer feedback to refine and validate the approach.
 
-# Final Report: 
+# SQL Query: 
+https://github.com/DeepshikhaChhetri/Project-TravelTide-Feb2025/blob/main/2.%20TravelTide%20EDA%20with%20SQL
 
+# Final Report: 
+https://github.com/DeepshikhaChhetri/Project-TravelTide-Feb2025/blob/main/3.%20Final%20Report.pdf
 
 # Tableau Dahsboard: 
 https://public.tableau.com/views/MasteryProjectTravelTideFeb25/CustomerSegmentationPerkDistributionDashboard?:language=en-US&:sid=&:redirect=auth&:display_count=n&:origin=viz_share_link
