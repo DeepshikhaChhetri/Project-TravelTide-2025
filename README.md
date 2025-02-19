@@ -60,3 +60,4 @@ https://public.tableau.com/views/MasteryProjectTravelTideFeb25/CustomerSegmentat
 
 
 # 5. Video Presentation: 
+https://www.loom.com/share/d05dcbc855424424a2ac1cce2a47133d?sid=98077edd-c9ec-4e09-b854-bf7bec29c0fa
