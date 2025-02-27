@@ -45,7 +45,7 @@ https://github.com/DeepshikhaChhetri/Project-TravelTide-Feb2025/blob/main/2.%20T
 
 
 ## 3. Final Report: 
-(https://github.com/DeepshikhaChhetri/Project-TravelTide-Feb2025/blob/main/3.%20Final%20Report.pdf)
+[(https://github.com/DeepshikhaChhetri/Project-TravelTide-Feb2025/blob/main/3.%20Final%20Report.pdf)](https://github.com/DeepshikhaChhetri/Project-TravelTide-2025/blob/main/3.%20Final%20Report.pdf)
 
 
 
